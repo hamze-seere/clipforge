@@ -62,11 +62,6 @@ In production, add a webhook endpoint in the Stripe dashboard for
 - **Accounts:** add password reset and email verification (or swap in Auth.js / Clerk).
 - **Abuse:** add rate limits per user and IP, and moderate prompts.
 
-## Local test account
+## Local data
 
-Created while testing on localhost (local SQLite only):
-
-- Email: `demo@clipforge.test`
-- Password: `cf-199dd3279b2b`
-
-Delete `data/app.db` to reset all accounts.
+Without `DATABASE_URL`, accounts live in a local SQLite file. Delete `data/app.db` to reset all accounts.
