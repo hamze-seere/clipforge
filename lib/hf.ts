@@ -2,9 +2,9 @@
 // Spaces run on Hugging Face's free ZeroGPU pool, which has a daily GPU quota:
 // small without a token, bigger with a free account token in HF_TOKEN.
 //
-// Gradio jobs are a POST that returns an event id, then one streamed GET that
-// ends with the result. The stream can only be read once, so the server reads
-// it in the background (see app/api/generate) and writes the result to the job.
+// Gradio jobs use the queue API: POST /queue/join, then one streamed GET of
+// /queue/data that ends with the result or a readable error. The stream can only
+// be read once, so the server reads it in the background (see app/api/generate).
 import "server-only";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -25,24 +25,47 @@ export interface HfInput {
   duration: number;
 }
 
-/** Queue a generation; returns the Gradio event id. */
+let fnIndex: Promise<number> | undefined;
+function getFnIndex() {
+  fnIndex ??= fetch(`${HF_SPACE}/config`, { cache: "no-store" })
+    .then((r) => r.json())
+    .then((c) => {
+      const dep = c.dependencies?.find((x: any) => x.api_name === ENDPOINT);
+      if (!dep) throw new Error("Hugging Face Space changed; the free model needs an update");
+      return Number(dep.id ?? c.dependencies.indexOf(dep));
+    })
+    .catch((e) => {
+      fnIndex = undefined;
+      throw e;
+    });
+  return fnIndex;
+}
+
+/** Queue a generation; returns a session id to pass to waitHf. */
 export async function startHf(input: HfInput): Promise<string> {
   // LTX-2.3 generate_video: [input_image, prompt, duration, enhance_prompt, seed, randomize_seed, height, width]
   const image = input.image ? { url: input.image, meta: { _type: "gradio.FileData" } } : null;
-  const res = await fetch(`${HF_SPACE}/gradio_api/call/${ENDPOINT}`, {
+  const session = crypto.randomUUID().replaceAll("-", "");
+  const res = await fetch(`${HF_SPACE}/gradio_api/queue/join`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ data: [image, input.prompt, input.duration, false, 0, true, input.height, input.width] }),
+    body: JSON.stringify({
+      data: [image, input.prompt, input.duration, false, 0, true, input.height, input.width],
+      fn_index: await getFnIndex(),
+      session_hash: session,
+      event_data: null,
+      trigger_id: null,
+    }),
     cache: "no-store",
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok || !body.event_id) throw new Error(body?.error || `Hugging Face is not available right now (${res.status})`);
-  return String(body.event_id);
+  if (!res.ok || !body.event_id) throw new Error(friendly(body?.detail || body?.error) || `Hugging Face is not available right now (${res.status})`);
+  return session;
 }
 
 /** Wait for a queued generation to finish; returns the video URL on the Space. */
-export async function waitHf(eventId: string): Promise<string> {
-  const res = await fetch(`${HF_SPACE}/gradio_api/call/${ENDPOINT}/${eventId}`, {
+export async function waitHf(session: string): Promise<string> {
+  const res = await fetch(`${HF_SPACE}/gradio_api/queue/data?session_hash=${session}`, {
     headers: headers(),
     cache: "no-store",
     signal: AbortSignal.timeout(10 * 60_000),
@@ -50,29 +73,35 @@ export async function waitHf(eventId: string): Promise<string> {
   if (!res.ok) throw new Error(`Hugging Face error ${res.status}`);
   const text = await res.text();
 
-  // Server-sent events: "event: <name>\ndata: <json>\n\n"
-  let last: { event: string; data: string } | undefined;
-  for (const block of text.split(/\n\n+/)) {
-    const event = /^event: (.*)$/m.exec(block)?.[1];
-    const data = /^data: (.*)$/m.exec(block)?.[1] ?? "";
-    if (event && event !== "heartbeat") last = { event, data };
-  }
-  if (last?.event === "complete") {
-    const out = JSON.parse(last.data);
-    const url = out?.[0]?.url ?? out?.[0]?.video?.url;
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+    let m: any;
+    try {
+      m = JSON.parse(line.slice(6));
+    } catch {
+      continue;
+    }
+    if (m?.msg !== "process_completed") continue;
+    if (!m.success) throw new Error(friendly(m.output?.error || m.title) || "Generation failed on Hugging Face");
+    const out = m.output?.data?.[0];
+    const url = out?.url ?? out?.video?.url;
     if (typeof url === "string") return url;
     throw new Error("Hugging Face returned no video");
   }
-  let msg = "Generation failed on Hugging Face";
-  try {
-    const d = JSON.parse(last?.data ?? "null");
-    if (typeof d === "string" && d) msg = d;
-  } catch {
-    if (last?.data) msg = last.data;
+  throw new Error("Hugging Face closed the connection before the video was ready");
+}
+
+/** Turn Hugging Face errors into a short message for the studio. */
+function friendly(msg?: string): string | undefined {
+  if (!msg) return undefined;
+  if (/ZeroGPU quota|exceeded your GPU quota/i.test(msg)) {
+    const wait = /Try again in ([\d:]+)/.exec(msg)?.[1];
+    const when = wait ? ` It resets in ${wait.replace(/^(\d+):(\d+):\d+$/, "$1h $2m")}.` : "";
+    return process.env.HF_TOKEN?.trim()
+      ? `Your free Hugging Face GPU time for today is used up.${when}`
+      : `Free Hugging Face GPU time without an account is used up.${when} Add a free HF_TOKEN for more.`;
   }
-  if (/quota|ZeroGPU|GPU duration/i.test(msg))
-    msg = "Free Hugging Face GPU quota used up for today. Add HF_TOKEN (free account) for more, or try again later.";
-  throw new Error(msg);
+  return msg.length > 300 ? msg.slice(0, 300) + "…" : msg;
 }
 
 // ---- local copies, so finished videos don't disappear when the Space cleans up
