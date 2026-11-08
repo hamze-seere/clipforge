@@ -14,7 +14,9 @@ export interface GenerateParams {
 }
 
 export interface VideoModel {
-  id: string; // Replicate "owner/name"
+  id: string; // Replicate "owner/name", or "hf/..." for the free Hugging Face model
+  /** "hf" runs on a free Hugging Face Space (lib/hf.ts); default is Replicate. */
+  provider?: "replicate" | "hf";
   name: string;
   tagline: string;
   textToVideo: boolean;
@@ -27,6 +29,19 @@ export interface VideoModel {
 }
 
 export const MODELS: VideoModel[] = [
+  {
+    id: "hf/ltx-2.3",
+    provider: "hf",
+    name: "LTX-2.3 Free",
+    tagline: "Free on Hugging Face, real video",
+    textToVideo: true,
+    imageToVideo: true,
+    requiresImage: false,
+    aspects: ["16:9", "9:16", "1:1"],
+    durations: [3, 5],
+    credits: () => 0,
+    buildInput: (p) => ({ prompt: p.prompt, image: p.image, aspect: p.aspect, duration: p.duration }),
+  },
   {
     id: "wan-video/wan-2.2-t2v-fast",
     name: "Wan 2.2 Fast",

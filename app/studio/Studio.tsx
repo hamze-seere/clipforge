@@ -213,7 +213,7 @@ export default function Studio({ initialCredits }: { initialCredits: number }) {
             {available.map((m) => (
               <button key={m.id} className="model" aria-pressed={m.id === model.id} onClick={() => setModelId(m.id)}>
                 <div><strong>{m.name}</strong><span>{m.tagline}</span></div>
-                <span className="cost">{m.credits({ ...params, duration: m.durations[0] })} cr</span>
+                <span className="cost">{m.credits({ ...params, duration: m.durations[0] }) || "Free"}{m.credits({ ...params, duration: m.durations[0] }) ? " cr" : ""}</span>
               </button>
             ))}
           </div>
@@ -249,7 +249,7 @@ export default function Studio({ initialCredits }: { initialCredits: number }) {
 
         <div className="generate">
           <button className="btn btn-primary btn-lg" disabled={!canGenerate} onClick={generate}>
-            {submitting ? "Sending…" : `Generate · ${cost} credits`}
+            {submitting ? "Sending…" : cost === 0 ? "Generate · free" : `Generate · ${cost} credits`}
           </button>
           {needsImage && <div className="err" style={{ color: "var(--muted)" }}>Add a start image to animate.</div>}
           {(credits < cost || needCredits) && (
@@ -270,9 +270,9 @@ export default function Studio({ initialCredits }: { initialCredits: number }) {
           </div>
         </div>
 
-        {(demo || jobs.some((j) => j.demo)) && (
+        {(jobs.some((j) => j.demo) || (demo && model.provider !== "hf")) && (
           <div className="banner">
-            Demo mode: no <code>REPLICATE_API_TOKEN</code> is set, so generations return sample clips. Add a token to <code>.env.local</code> to generate real videos.
+            Demo mode for paid models: no <code>REPLICATE_API_TOKEN</code> is set, so they return sample clips. <strong>LTX-2.3 Free</strong> makes real videos on Hugging Face at no cost.
           </div>
         )}
 

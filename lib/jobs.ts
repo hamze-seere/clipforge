@@ -65,6 +65,14 @@ async function applyStatus(userId: number, job: JobRow, status: JobStatus, outpu
   });
 }
 
+const HF_TIMEOUT = 15 * 60_000;
+
+/** Record the result of a background (Hugging Face) job. */
+export async function finishJob(userId: number, id: string, status: JobStatus, output?: string, error?: string) {
+  const job = await getOwned(userId, id);
+  if (job) await applyStatus(userId, job, status, output, error);
+}
+
 /** List a user's jobs, refreshing any that are still running from the provider first. */
 export async function listJobs(userId: number): Promise<JobRow[]> {
   const list = async () =>
@@ -73,6 +81,11 @@ export async function listJobs(userId: number): Promise<JobRow[]> {
 
   await Promise.all(
     rows.filter((r) => isActive(r.status)).map(async (r) => {
+      // Hugging Face jobs are written by the request that started them; only time out lost ones.
+      if (r.id.startsWith("hf_")) {
+        if (Date.now() - r.createdAt > HF_TIMEOUT) await applyStatus(userId, r, "failed", undefined, "Timed out (the server restarted or Hugging Face is busy)");
+        return;
+      }
       try {
         const p = await getPrediction(r.id);
         await applyStatus(userId, r, p.status, p.output, p.error);
@@ -90,7 +103,7 @@ export async function cancelOrDelete(userId: number, id: string): Promise<boolea
   const job = await getOwned(userId, id);
   if (!job) return false;
   if (isActive(job.status)) {
-    await cancelPrediction(id).catch(() => {});
+    if (!id.startsWith("hf_")) await cancelPrediction(id).catch(() => {});
     await applyStatus(userId, job, "canceled");
   } else {
     await (await db()).run("UPDATE jobs SET deleted = 1 WHERE id = ? AND user_id = ?", id, userId);

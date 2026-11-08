@@ -14,7 +14,11 @@ cp .env.example .env.local   # add REPLICATE_API_TOKEN for real generations
 npm run dev                  # http://localhost:3000
 ```
 
-Without a token the app runs in **demo mode**: each job takes about 9 seconds and returns a sample clip.
+Without a token the paid models run in **demo mode**: each job takes about 9 seconds and returns a sample clip.
+
+**LTX-2.3 Free** makes real videos at no cost on a public Hugging Face Space (`lib/hf.ts`), about
+30–60 seconds per clip. Finished videos are saved to `data/videos/`. Hugging Face gives a small
+daily GPU allowance; set `HF_TOKEN` (a free "Read" token) in `.env.local` for a bigger one.
 
 ## How it works
 

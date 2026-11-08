@@ -1,12 +1,15 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { getModel, type Aspect } from "@/lib/models";
 import { createPrediction, isDemo } from "@/lib/replicate";
 import { currentUser } from "@/lib/auth";
 import { addCredits, InsufficientCredits, spendCredits } from "@/lib/credits";
-import { insertJob } from "@/lib/jobs";
+import { finishJob, insertJob } from "@/lib/jobs";
+import { hfSize, saveVideo, startHf, waitHf } from "@/lib/hf";
 
 const MAX_PROMPT = 2000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+
+export const maxDuration = 300; // free Hugging Face jobs finish in the background of this request
 
 export async function POST(req: Request) {
   const user = await currentUser();
@@ -44,18 +47,40 @@ export async function POST(req: Request) {
 
   // Charge first so two parallel requests can't both spend the same credits.
   try {
-    await spendCredits(user.id, cost, "generation", model.id);
+    if (cost > 0) await spendCredits(user.id, cost, "generation", model.id);
   } catch (e) {
     if (e instanceof InsufficientCredits)
       return NextResponse.json({ error: "Not enough credits", needCredits: true }, { status: 402 });
     throw e;
   }
 
+  if (model.provider === "hf") {
+    let eventId: string;
+    try {
+      eventId = await startHf({ prompt, image, duration, ...hfSize(aspect) });
+    } catch (e: any) {
+      if (cost > 0) await addCredits(user.id, cost, "refund", "provider_error");
+      return NextResponse.json({ error: e?.message ?? "Generation failed" }, { status: 502 });
+    }
+    const id = `hf_${eventId}`;
+    await insertJob(user.id, { id, prompt, model: model.id, aspect, duration, hadImage: !!image, credits: cost, status: "processing" });
+    // Read the result after responding; the studio polls the job row meanwhile.
+    after(async () => {
+      try {
+        const url = await waitHf(eventId);
+        await finishJob(user.id, id, "succeeded", await saveVideo(id, url));
+      } catch (e: any) {
+        await finishJob(user.id, id, "failed", undefined, e?.message ?? "Generation failed");
+      }
+    });
+    return NextResponse.json({ id, demo: false });
+  }
+
   let job;
   try {
     job = await createPrediction(model.id, model.buildInput(params));
   } catch (e: any) {
-    await addCredits(user.id, cost, "refund", "provider_error");
+    if (cost > 0) await addCredits(user.id, cost, "refund", "provider_error");
     return NextResponse.json({ error: e?.message ?? "Generation failed" }, { status: 502 });
   }
 
