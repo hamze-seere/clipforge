@@ -18,6 +18,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ url: `/billing?test_purchase=${pack.id}` });
   }
 
+  if (!process.env.STRIPE_SECRET_KEY?.trim())
+    return NextResponse.json({ error: "Payments aren't switched on yet. Check back soon." }, { status: 503 });
+
   const origin = process.env.APP_URL?.replace(/\/$/, "") || new URL(req.url).origin;
   try {
     const session = await stripe().checkout.sessions.create({
