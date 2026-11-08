@@ -4,6 +4,8 @@ Text-to-video and image-to-video studio built with Next.js. Generation runs on
 hosted models (Veo 3, Kling 2.1, Seedance, MiniMax, Wan) through the
 [Replicate](https://replicate.com) API.
 
+Live: https://clipforge-olive-one.vercel.app (Vercel + Neon Postgres). Every push to `main` deploys.
+
 ## Run it
 
 ```bash
